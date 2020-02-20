@@ -1,6 +1,36 @@
-version: "3.4"
+version: '3.4'
 
 services:
+  nsqlookupd:
+    image: nsqio/nsq
+    command: /nsqlookupd
+    ports:
+      - '4160:4160'
+      - '4161:4161'
+    networks:
+      - default
+
+  nsqd:
+    image: nsqio/nsq
+    command: /nsqd --broadcast-address=127.0.0.1 --lookupd-tcp-address=nsqlookupd:4160
+    depends_on:
+      - nsqlookupd
+    ports:
+      - '4150:4150'
+      - '4151:4151'
+    networks:
+      - default
+
+  nsqadmin:
+    image: nsqio/nsq
+    command: /nsqadmin --lookupd-http-address=nsqlookupd:4161
+    depends_on:
+      - nsqlookupd
+    ports:
+      - '4171:4171'
+    networks:
+      - default
+
   aggregator:
     image: bdc/aggregator
     build:
@@ -9,7 +39,7 @@ services:
     networks:
       - default
     ports:
-      - "8080:8080"
+      - '8080:8080'
 
   correlation:
     image: bdc/correlation
@@ -31,36 +61,6 @@ services:
     depends_on:
       - aggregator
       - correlation
-
-  nsqlookupd:
-    image: nsqio/nsq
-    command: /nsqlookupd
-    ports:
-      - "4160:4160"
-      - "4161:4161"
-    networks:
-      - default
-
-  nsqd:
-    image: nsqio/nsq
-    command: /nsqd --broadcast-address=nsqd --lookupd-tcp-address=nsqlookupd:4160
-    depends_on:
-      - nsqlookupd
-    ports:
-      - "4150:4150"
-      - "4151:4151"
-    networks:
-      - default
-
-  nsqadmin:
-    image: nsqio/nsq
-    command: /nsqadmin --lookupd-http-address=nsqlookupd:4161
-    depends_on:
-      - nsqlookupd
-    ports:
-      - "4171:4171"
-    networks:
-      - default
 
 networks:
   default:

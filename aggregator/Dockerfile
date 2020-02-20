@@ -1,18 +1,20 @@
 FROM node:lts-alpine
 
-# make the 'app' folder the current working directory
 WORKDIR /app
 
-# copy both 'package.json' and 'package-lock.json' (if available)
-COPY ./aggregator/package*.json ./
+COPY ./ ./
+
+WORKDIR ./aggregator
+
+run apk --no-cache add --virtual native-deps \
+  g++ gcc libgcc libstdc++ linux-headers make python && \
+  npm install --quiet node-gyp -g &&\
+  npm install --quiet && \
+  apk del native-deps
+
+# make the 'app' folder the current working directory
 
 # install project dependencies
 RUN npm install
-
-# copy project files and folders to the current working directory (i.e. 'app' folder)
-COPY ./aggregator/. .
-
-# build app for production with minification
-RUN npm run build
 
 CMD [ "npm", "run", "start"] 
