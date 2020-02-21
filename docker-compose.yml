@@ -12,7 +12,7 @@ services:
 
   nsqd:
     image: nsqio/nsq
-    command: /nsqd --broadcast-address=127.0.0.1 --lookupd-tcp-address=nsqlookupd:4160
+    command: /nsqd --broadcast-address=nsqd --lookupd-tcp-address=nsqlookupd:4160
     depends_on:
       - nsqlookupd
     ports:
@@ -40,6 +40,8 @@ services:
       - default
     ports:
       - '8080:8080'
+    depends_on:
+      - nsqd
 
   correlation:
     image: bdc/correlation
@@ -50,6 +52,7 @@ services:
       - default
     depends_on:
       - aggregator
+      - nsqd
 
   device:
     image: bdc/device
@@ -61,6 +64,7 @@ services:
     depends_on:
       - aggregator
       - correlation
+      - nsqd
 
 networks:
   default:

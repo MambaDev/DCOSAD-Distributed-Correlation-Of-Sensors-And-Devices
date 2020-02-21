@@ -1,9 +1,7 @@
-const restify = require('restify');
 const nsq = require('nsqjs');
 const _ = require('lodash');
 
 const logger = require('./logger');
-const request = require('../shared/request');
 const { sleep } = require('../shared/utilities');
 
 const state = {
@@ -32,6 +30,7 @@ function handleReadyState(type) {
  */
 function handleReaderMessage(message) {
   logger.info('Received message [%s]: %s', message.id, message.body.toString());
+  if (state.writerReady) state.writer.publish('sensor-data', message.body);
   message.finish();
 }
 
@@ -41,33 +40,14 @@ function handleReaderMessage(message) {
  */
 function handleReaderError(error) {
   logger.error(`error occurred: ${error}`);
-  state.readerReady = false;
 }
-
-// ###################################
-// # Restify
-// ###################################
-
-const server = restify.createServer();
-
-server.get('/data', (req, res) => {
-  const body = req.body || request.dataRequestGenerator(0, false, 10, 10);
-  const { id, invalidData, temperature, humidity } = body;
-
-  logger.info(`data from device: ${id} | invalid: ${invalidData} | temp: ${temperature} | humidity ${humidity}`);
-  if (state.writerReady) state.writer.publish('raw-sensor-data', req.body || { sample: 101, example: 'hello' });
-
-  return res.send();
-});
-
-server.listen(8080, () => console.log('%s listening at %s', server.name, server.url));
 
 // ###################################
 // # Setup
 // ###################################
 
 state.writer = new nsq.Writer('nsqd', 4150);
-state.reader = new nsq.Reader('sensor-data', 'progressed-ready', {
+state.reader = new nsq.Reader('raw-sensor-data', 'preprogressing', {
   lookupdHTTPAddresses: 'nsqlookupd:4161',
 });
 
@@ -85,7 +65,7 @@ async function setup() {
   await sleep(1000);
   logger.info('setting up aggregator');
 
-  state.reader.connectToNSQD('nsqlookupd', 4161);
+  state.reader.connect();
   state.writer.connect();
 }
 
