@@ -13,7 +13,7 @@ const state = {
 
   everyOtherToggle: false,
 
-  upperShift: 1.2,
+  upperShift: 1.4,
   lowerShift: 0.6,
 
   falseReportingTypes: {
