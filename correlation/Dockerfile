@@ -14,7 +14,4 @@ run apk --no-cache add --virtual native-deps \
 
 # make the 'app' folder the current working directory
 
-# install project dependencies
-RUN npm install
-
 CMD [ "npm", "run", "start"] 

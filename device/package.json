@@ -12,8 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "lodash": "^4.17.15",
-    "nsqjs": "^0.12.1",
-    "restify": "^8.5.1",
+    "node-fetch": "^2.6.0",
     "winston": "^3.2.1"
   },
   "devDependencies": {

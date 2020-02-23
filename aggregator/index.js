@@ -1,9 +1,9 @@
 const restify = require('restify');
 const nsq = require('nsqjs');
 const _ = require('lodash');
+const { v4: uuid } = require('uuid');
 
 const logger = require('./logger');
-const request = require('../shared/request');
 const { sleep } = require('../shared/utilities');
 
 const state = {
@@ -11,6 +11,35 @@ const state = {
   readerReady: false,
   reader: null,
   writer: null,
+};
+
+// ###################################
+// # Registration and Zone Assignment
+// ###################################
+
+const zones = {
+  allocatedCount: 0,
+  maxSection: 36,
+  data: [
+    {
+      id: 1,
+      temperature: { min: 50, max: 60 },
+      sections: { min: 1, max: 4, allocations: [] },
+      amount: 0,
+    },
+    {
+      id: 2,
+      temperature: { min: 40, max: 55 },
+      sections: { min: 5, max: 16, allocations: [] },
+      amount: 0,
+    },
+    {
+      id: 3,
+      temperature: { min: 20, max: 40 },
+      sections: { min: 17, max: 36, allocations: [] },
+      amount: 0,
+    },
+  ],
 };
 
 // ###################################
@@ -31,7 +60,12 @@ function handleReadyState(type) {
  * @param {string} message The message that was sent to the by the reader.
  */
 function handleReaderMessage(message) {
-  logger.info('Received message [%s]: %s', message.id, message.body.toString());
+  const { id, zone, section, temperature } = JSON.parse(message.body.toString());
+
+  const deviceId = id.split('-')[0];
+  const temp = JSON.stringify(temperature);
+
+  logger.info(`Validated data from device: ${deviceId}, zone: ${zone}, section: ${section}, temp: ${temp}`);
   message.finish();
 }
 
@@ -50,17 +84,67 @@ function handleReaderError(error) {
 
 const server = restify.createServer();
 
-server.get('/data', (req, res) => {
-  const body = req.body || request.dataRequestGenerator(0, false, 10, 10);
-  const { id, invalidData, temperature, humidity } = body;
+server.get('/data', (req, res) => res.json(zones));
 
-  logger.info(`data from device: ${id} | invalid: ${invalidData} | temp: ${temperature} | humidity ${humidity}`);
-  if (state.writerReady) state.writer.publish('raw-sensor-data', req.body || { sample: 101, example: 'hello' });
+server.post('/data', (req, res) => {
+  const { id, zone, section, invalid, temperature, humidity } = req.body;
+  if (_.isNil(id) || _.isNil(zone)) return res.send();
+
+  if (state.writerReady) state.writer.publish('raw-sensor-data', req.body);
+
+  const alloc = zones.data[zone - 1].sections.allocations.filter((e) => e.id === id)[0];
+
+  if (_.isNil(alloc)) zones.data[zone - 1].sections.allocations.push({ id, section, lastSeen: new Date() });
+  if (!_.isNil(alloc)) alloc.lastSeen = new Date();
 
   return res.send();
 });
 
+server.get('/register', (req, res) => {
+  const spaces = zones.data;
+
+  const sectionAllocation = (zones.allocatedCount % zones.maxSection) + 1;
+  const zone = _.filter(spaces, (x) => x.sections.min <= sectionAllocation && x.sections.max >= sectionAllocation)[0];
+
+  const deviceId = uuid();
+  const deviceAllocation = { id: deviceId, section: sectionAllocation, lastSeen: new Date() };
+  zone.sections.allocations.push(deviceAllocation);
+
+  zone.amount += 1;
+  zones.allocatedCount += 1;
+
+  logger.info(`registered device: ${deviceId.split('-')[0]}, zone: ${zone.id}, section: ${sectionAllocation}`);
+
+  return res.json({
+    id: deviceId,
+    zone: { id: zone.id, section: sectionAllocation, temperature: zone.temperature },
+  });
+});
+
+server.use(restify.plugins.bodyParser());
+server.use(restify.plugins.queryParser());
+
 server.listen(8080, () => console.log('%s listening at %s', server.name, server.url));
+
+// ###################################
+// # cleanup
+// ###################################
+
+// after every 5 seconds, check that for every single registered device, that the device
+// that is being reported is not out of scope by 10 seconds (e.g its no longer reporting)
+// any data within 10 seconds. This will help with the experiment data being clean.
+state.cleanupInterval = setInterval(() => {
+  for (const zone of zones.data) {
+    const currentTime = new Date();
+
+    const filtered = zone.sections.allocations.filter((e) => (currentTime - e.lastSeen) / 1000 < 10);
+
+    zone.sections.allocations = filtered;
+    zone.amount = filtered.length;
+  }
+
+  zones.allocatedCount = _.sum(zones.data.map((e) => e.amount));
+}, 5000);
 
 // ###################################
 // # Setup
@@ -69,6 +153,7 @@ server.listen(8080, () => console.log('%s listening at %s', server.name, server.
 state.writer = new nsq.Writer('nsqd', 4150);
 state.reader = new nsq.Reader('sensor-data', 'progressed-ready', {
   lookupdHTTPAddresses: 'nsqlookupd:4161',
+  maxInFlight: 5,
 });
 
 /**
@@ -83,9 +168,9 @@ state.reader.on('error', handleReaderError);
 
 async function setup() {
   await sleep(1000);
-  logger.info('setting up aggregator');
+  logger.info('setting up aggregator - 1.0.0');
 
-  state.reader.connectToNSQD('nsqlookupd', 4161);
+  state.reader.connect();
   state.writer.connect();
 }
 

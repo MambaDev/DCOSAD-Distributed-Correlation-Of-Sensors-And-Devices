@@ -24,7 +24,7 @@ const myFormat = printf((info) => {
   if (info instanceof Error) {
     message += ` ${info.stack}`;
   } else if (info.message instanceof Object) {
-    message += JSON.stringify(info.message, null, 4);
+    message += JSON.stringify(info.message);
   } else {
     message += info.message;
   }

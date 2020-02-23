@@ -1,18 +1,19 @@
 FROM node:lts-alpine
 
-# make the 'app' folder the current working directory
 WORKDIR /app
 
-# copy both 'package.json' and 'package-lock.json' (if available)
-COPY ./device/package*.json ./
+COPY ./ ./
 
-# install project dependencies
-RUN npm install
+WORKDIR ./device
 
-# copy project files and folders to the current working directory (i.e. 'app' folder)
-COPY ./device/. .
+run apk --no-cache add --virtual native-deps \
+  g++ gcc libgcc libstdc++ linux-headers make python py-pip && \
+  npm install --quiet node-gyp -g &&\
+  npm install --quiet && \
+  pip install dumb-init && \
+  apk del native-deps
 
-# build app for production with minification
-RUN npm run build
+# make the 'app' folder the current working directory
 
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD [ "npm", "run", "start"] 
