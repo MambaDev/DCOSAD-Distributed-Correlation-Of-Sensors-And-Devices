@@ -57,20 +57,22 @@ function handleReadyState(type) {
  * @param {string} message The message that was sent to the by the reader.
  */
 function handleReaderMessage(message) {
-  const { id, zone, section, temperature } = JSON.parse(message.body.toString());
+  const { id, zone, section, temperature, invalid, type } = JSON.parse(message.body.toString());
 
-  const deviceId = id.split('-')[0];
   const temp = JSON.stringify(temperature);
   const location = section - 1;
 
-  logger.info(`pre-validation data from device: ${deviceId}, zone: ${zone}, section: ${section}, temp: ${temp}`);
+  logger.info(
+    `pre-validation data from device: ${id}, zone: ${zone}, section: ${section}, invalid: ${invalid}, type: ${type}, temp: ${temp}`
+  );
+  logger.info();
 
   zones.data[location].push(temperature.temperature);
   if (zones.data[location].length > state.zonesDataHistory) {
     zones.data[location].shift();
   }
 
-  logger.info(`${zones.data} - \n AMOUNT: ${_.sum(_.map(zones.data, (x) => x.length))}`);
+  logger.info(`${JSON.stringify(zones.data)} - \n AMOUNT: ${_.sum(_.map(zones.data, (x) => x.length))}`);
 
   if (state.writerReady) state.writer.publish('sensor-data', message.body);
   message.finish();
@@ -109,6 +111,8 @@ async function setup() {
   logger.info('setting up aggregator');
   logger.info('generating index array');
 
+  // setup the data arrays that will contain all the history of all the sensor data. since if we
+  // allocate all the space before hand to help with simplifying allocation of space.
   for (let index = 0; index < 36; index++) {
     zones.data.push([]);
   }

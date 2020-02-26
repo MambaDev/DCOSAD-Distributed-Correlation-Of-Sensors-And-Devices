@@ -9,19 +9,22 @@ const state = {
   reportingInterval: null,
   reportingFalseData: false,
   falseReportingPercent: 0.1,
-  falseReportingType: null,
+  falseReportingType: 'REAL',
 
   everyOtherToggle: false,
 
   upperShift: 1.4,
   lowerShift: 0.6,
 
+  falseReportingPercentage: 5, // 5%
+  dataProducedCount: 0, // the amount of data produced.
+
   falseReportingTypes: {
-    DEAD: 0,
-    TOO_LOW: 1,
-    TOO_HIGH: 2,
-    FLUX: 3,
-    EVERY_OTHER: 4,
+    DEAD: 'DEAD',
+    TOO_LOW: 'TOO_LOW',
+    TOO_HIGH: 'TOO_HIGH',
+    FLUX: 'FLUX',
+    EVERY_OTHER: 'EVERY_OTHER',
   },
 };
 
@@ -65,6 +68,10 @@ function generateTooLowerData(zone) {
   return { temperature: { temperature, humidity } };
 }
 
+function generateDeadData(zone) {
+  return { temperature: { temperature: 0, humidity: 0 } };
+}
+
 function generateFakeReportingData(zone) {
   switch (state.falseReportingType) {
     case state.falseReportingTypes.TOO_LOW:
@@ -87,12 +94,12 @@ function generateFakeReportingData(zone) {
       // random data within the range in one case but in the every other case, zero will be
       // returned.
       state.everyOtherToggle = !state.everyOtherToggle;
-      return state.everyOtherToggle ? 0 : generateReportingDataStandard(zone);
+      return state.everyOtherToggle ? generateDeadData(zone) : generateReportingDataStandard(zone);
 
     case state.falseReportingTypes.DEAD:
       // Act as if the device was reporting as dead, e.g all results regardless if what device is
       // reporting back as zero.
-      return 0;
+      return generateDeadData(zone);
 
     default:
       return generateReportingDataStandard(zone);
@@ -102,9 +109,26 @@ function generateFakeReportingData(zone) {
 function generateReportingData() {
   const zone = state.allocation.zone;
 
+  // determine if we should be switching to fake data now or not.
+  // and if we are, what mode are we going to be operating in.
+  if (
+    !state.reportingFalseData &&
+    state.dataProducedCount > 10 &&
+    getRandomArbitrary(1, 100) <= state.falseReportingPercentage
+  ) {
+    state.falseReportingType = _.sample(state.falseReportingTypes);
+    state.reportingFalseData = true;
+
+    logger.info(
+      `device ${state.allocation.id} now in fault state: ${state.falseReportingType} - count: ${state.dataProducedCount}`
+    );
+  }
+
   const data = state.reportingFalseData
     ? generateFakeReportingData(state.allocation.zone)
     : generateReportingDataStandard(state.allocation.zone);
+
+  state.dataProducedCount += 1;
 
   return {
     ...data,
@@ -112,6 +136,7 @@ function generateReportingData() {
     section: zone.section,
     id: state.allocation.id,
     invalid: state.reportingFalseData,
+    type: state.falseReportingType,
   };
 }
 

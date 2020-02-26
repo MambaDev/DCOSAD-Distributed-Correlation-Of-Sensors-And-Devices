@@ -62,10 +62,9 @@ function handleReadyState(type) {
 function handleReaderMessage(message) {
   const { id, zone, section, temperature } = JSON.parse(message.body.toString());
 
-  const deviceId = id.split('-')[0];
   const temp = JSON.stringify(temperature);
 
-  logger.info(`Validated data from device: ${deviceId}, zone: ${zone}, section: ${section}, temp: ${temp}`);
+  logger.info(`Validated data from device: ${id}, zone: ${zone}, section: ${section}, temp: ${temp}`);
   message.finish();
 }
 
@@ -113,7 +112,7 @@ server.get('/register', (req, res) => {
   zone.amount += 1;
   zones.allocatedCount += 1;
 
-  logger.info(`registered device: ${deviceId.split('-')[0]}, zone: ${zone.id}, section: ${sectionAllocation}`);
+  logger.info(`registered device: ${deviceId}, zone: ${zone.id}, section: ${sectionAllocation}`);
 
   return res.json({
     id: deviceId,
