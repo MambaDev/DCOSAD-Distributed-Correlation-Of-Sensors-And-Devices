@@ -8,7 +8,6 @@ const state = {
   allocation: {},
   reportingInterval: null,
   reportingFalseData: false,
-  falseReportingPercent: 0.1,
   falseReportingType: 'REAL',
 
   everyOtherToggle: false,
@@ -16,7 +15,7 @@ const state = {
   upperShift: 1.4,
   lowerShift: 0.6,
 
-  falseReportingPercentage: 5, // 5%
+  falseReportingPercentage: 2, // 2%
   dataProducedCount: 0, // the amount of data produced.
 
   falseReportingTypes: {
@@ -111,17 +110,34 @@ function generateReportingData() {
 
   // determine if we should be switching to fake data now or not.
   // and if we are, what mode are we going to be operating in.
-  if (
-    !state.reportingFalseData &&
-    state.dataProducedCount > 10 &&
-    getRandomArbitrary(1, 100) <= state.falseReportingPercentage
-  ) {
-    state.falseReportingType = _.sample(state.falseReportingTypes);
-    state.reportingFalseData = true;
+  if (!state.reportingFalseData && state.dataProducedCount % 5 == 0) {
+    const reportingValue = getRandomArbitrary(1, 100);
 
-    logger.info(
-      `device ${state.allocation.id} now in fault state: ${state.falseReportingType} - count: ${state.dataProducedCount}`
-    );
+    // if the value does not meet the minimal requirements to become broken, then
+    // return out early.
+    if (reportingValue <= state.falseReportingPercentage) {
+      state.falseReportingType = _.sample(state.falseReportingTypes);
+      state.reportingFalseData = true;
+
+      const { id } = state.allocation;
+      const { falseReportingType: type, dataProducedCount: count } = state;
+
+      logger.info(`${id} - fault state: chance: ${reportingValue} - type: ${type} - count: ${count}`);
+    }
+  }
+
+  if (state.reportingFalseData && state.dataProducedCount % 5 === 0) {
+    const reportingValue = getRandomArbitrary(1, 100);
+
+    if (reportingValue <= state.falseReportingPercentage) {
+      state.falseReportingType = 'REAL';
+      state.reportingFalseData = false;
+
+      const { id } = state.allocation;
+      const { falseReportingType: type, dataProducedCount: count } = state;
+
+      logger.info(`${id} - standard state: chance: ${reportingValue} - type: ${type} - count: ${count}`);
+    }
   }
 
   const data = state.reportingFalseData
@@ -170,7 +186,7 @@ async function setup() {
   const temp = zone.temperature;
 
   logger.info(`allocated id: ${deviceId}, zone: ${zone.id}, section: ${zone.section}, range: ${temp.min}-${temp.max}`);
-  state.reportingInterval = setInterval(async () => sendReportingData(), 2500);
+  state.reportingInterval = setInterval(sendReportingData, 50);
 }
 
 setup();
