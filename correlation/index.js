@@ -34,7 +34,7 @@ const zones = {
     },
     {
       id: 2,
-      temperature: { min: 40, max: 55 },
+      temperature: { min: 40, max: 50 },
       sections: { min: 5, max: 16, allocations: [] },
     },
     {
@@ -57,7 +57,20 @@ const zones = {
  */
 function withinZoneSectionData(data) {
   const { id, zone, section, temperature, invalid, type } = data;
-  return true;
+  const zoneRangeData = [];
+
+  for (let i = zones.info[zone - 1].sections.min - 1; i < zones.info[zone - 1].sections.max; i++) {
+    if (zones.data[i].length === 0) continue;
+
+    zoneRangeData.push(_.sum(_.map(zones.data[i], (e) => e.temperature)) / zones.data[i].length);
+  }
+
+  const average = _.sum(zoneRangeData) / zoneRangeData.length;
+  const percentage = Math.abs((temperature.temperature / average - 1) * 100);
+
+  if (zoneRangeData.length === 0) return true;
+
+  return percentage <= 15;
 }
 
 /**
@@ -73,9 +86,11 @@ function withinZoneAndSectionData(data) {
   const average = _.sum(_.map(zoneData, (e) => e.temperature)) / zoneData.length;
 
   const percentage = Math.abs((temperature.temperature / average - 1) * 100);
-  logger.info({ zoneAndSection: zoneData.length, average, percentage, result: percentage <= 10 });
 
-  return percentage <= 10;
+  if (type === 'REAL' && percentage > 12.5)
+    logger.info({ zone, section, percentage, average, invalid, type, temperature });
+
+  return percentage <= 12.5;
 }
 
 /**
@@ -93,9 +108,8 @@ function notWithinBoundsOfTouchingZones(data) {
 function performCorrelationCheck(data) {
   const failedCorrelation = { reason: null, failed: false };
 
-  // if we are not invalid don't bother
-  if (!failedCorrelation.failed && !withinZoneAndSectionData(data)) {
-    failedCorrelation.reason = state.correlationFailedTypes.NOT_WITHIN_ZONE_SECTION;
+  if (!failedCorrelation.failed && !notWithinBoundsOfTouchingZones(data)) {
+    failedCorrelation.reason = state.correlationFailedTypes.WITHIN_BOUNDING_ZONES;
     failedCorrelation.failed = true;
   }
 
@@ -104,25 +118,26 @@ function performCorrelationCheck(data) {
     failedCorrelation.failed = true;
   }
 
-  if (!failedCorrelation.failed && !notWithinBoundsOfTouchingZones(data)) {
-    failedCorrelation.reason = state.correlationFailedTypes.WITHIN_BOUNDING_ZONES;
+  // if we are not invalid don't bother
+  if (!failedCorrelation.failed && !withinZoneAndSectionData(data)) {
+    failedCorrelation.reason = state.correlationFailedTypes.NOT_WITHIN_ZONE_SECTION;
     failedCorrelation.failed = true;
   }
 
   // write it into the database with the expanded data, reason caught, and related data.
   if (failedCorrelation.failed) {
-    return failedCorrelation.failed;
+    return failedCorrelation;
   }
 
   // if the given data was invalid and it was not caught by the correlation service, then
   // we must also store this kind of information, so that we know what type is not being
   // caught and any additional data that could be used to understand why.
   if (!failedCorrelation.failed && data.invalid) {
-    return failedCorrelation.failed;
+    return failedCorrelation;
   }
 
   // it was not caught and it was not a invalid type.
-  return failedCorrelation.failed;
+  return failedCorrelation;
 }
 
 // ###################################
@@ -146,24 +161,27 @@ function handleReaderMessage(message) {
   const { id, zone, section, temperature: temp, invalid, type } = JSON.parse(message.body.toString());
   const location = section - 1;
 
-  const logMessage =
-    `pre-validation - for ${id} zone: ${zone}, section: ${section}, invalid: ` +
-    `${invalid}, type: ${type}, temperature: ${temp.temperature}, humidity: ${temp.humidity}`;
-
-  logger.info(logMessage);
+  // const logMessage =
+  //   `pre-validation - for ${id} zone: ${zone}, section: ${section}, invalid: ` +
+  //   `${invalid}, type: ${type}, temperature: ${temp.temperature}, humidity: ${temp.humidity}`;
 
   const zoneAmount = _.sum(_.map(zones.data, (x) => x.length));
 
   // if the data failed the validation process or it was a invalid data type, then don't bother processing the data
   // more and let the logger know that one was caught. This should return false always if the data was caught or invalid.
   // since this is a perfect case and we don't want bad data actually tainting the experiment.
-  if ((zoneAmount === state.zonesDataHistory * 1 && performCorrelationCheck(JSON.parse(message.body))) || invalid) {
-    const logMessage =
-      `validation correlation - failed for ${id} - zone: ${zone}, section: ${section}, invalid: ` +
-      `${invalid}, type: ${type}, temperature: ${temp.temperature}, humidity: ${temp.humidity}`;
+  if (zoneAmount >= state.zonesDataHistory * 1 || invalid) {
+    const correlationCheck = performCorrelationCheck(JSON.parse(message.body));
 
-    logger.info(logMessage);
-    return message.finish();
+    // if it did not fail, then don't handle it as if it fails.
+    if (correlationCheck.failed) {
+      const logMessage =
+        `validation correlation - failed for ${id} - zone: ${zone}, section: ${section}, invalid: ` +
+        `${invalid}, type: ${type}, reason: ${correlationCheck.reason}, percentage: ${correlationCheck.percentage}, temperature: ${temp.temperature}, humidity: ${temp.humidity}`;
+
+      // logger.info(logMessage);
+      return message.finish();
+    }
   }
 
   zones.data[location].push(temp);
@@ -171,7 +189,6 @@ function handleReaderMessage(message) {
     zones.data[location].shift();
   }
 
-  logger.info(`AMOUNT: ${zoneAmount + 1}`);
   state.writer.publish('sensor-data', message.body);
   message.finish();
 }

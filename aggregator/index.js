@@ -29,7 +29,7 @@ const zones = {
     },
     {
       id: 2,
-      temperature: { min: 40, max: 55 },
+      temperature: { min: 40, max: 50 },
       sections: { min: 5, max: 16, allocations: [] },
       amount: 0,
     },
