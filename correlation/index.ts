@@ -1,8 +1,14 @@
-const nsq = require('nsqjs');
-const _ = require('lodash');
+import * as nsq from 'nsqjs';
+import * as _ from 'lodash';
 
-const logger = require('./logger');
+import 'reflect-metadata';
+import logger from './logger';
+import { Connection, ConnectToDatabase } from './connection';
+import { getRepository } from 'typeorm';
+import { DeviceEntry } from './entity/device.model';
+
 const { sleep } = require('../shared/utilities');
+
 
 const state = {
   writerReady: false,
@@ -55,7 +61,7 @@ const zones = {
  *
  * @param {object} data The data produced by the device.
  */
-function withinZoneSectionData(data) {
+function withinZoneSectionData(data): { passed: boolean, percentage: number } {
   const { id, zone, section, temperature, invalid, type } = data;
   const zoneRangeData = [];
 
@@ -65,12 +71,15 @@ function withinZoneSectionData(data) {
     zoneRangeData.push(_.sum(_.map(zones.data[i], (e) => e.temperature)) / zones.data[i].length);
   }
 
+  if (zoneRangeData.length == 0) return { passed: true, percentage: 0 };
+
   const average = _.sum(zoneRangeData) / zoneRangeData.length;
   const percentage = Math.abs((temperature.temperature / average - 1) * 100);
 
-  if (zoneRangeData.length === 0) return true;
+  logger.info({ len: zoneRangeData.length,  average, temp: temperature.temperature, percentage });
 
-  return percentage <= 15;
+  if (zoneRangeData.length === 0) return { passed: true, percentage: 0 };
+  return { passed: percentage <= 15, percentage };
 }
 
 /**
@@ -79,18 +88,16 @@ function withinZoneSectionData(data) {
  *
  * @param {object} data The data produced by the device.
  */
-function withinZoneAndSectionData(data) {
+function withinZoneAndSectionData(data): { passed: boolean, percentage: number } {
   const { id, zone, section, temperature, invalid, type } = data;
 
   const zoneData = zones.data[data.section - 1];
+  if (zoneData.length == 0) return { passed: true, percentage: 0 };
+
   const average = _.sum(_.map(zoneData, (e) => e.temperature)) / zoneData.length;
 
   const percentage = Math.abs((temperature.temperature / average - 1) * 100);
-
-  if (type === 'REAL' && percentage > 12.5)
-    logger.info({ zone, section, percentage, average, invalid, type, temperature });
-
-  return percentage <= 12.5;
+  return { passed: percentage <= 12.5, percentage };
 }
 
 /**
@@ -100,28 +107,44 @@ function withinZoneAndSectionData(data) {
  *
  * @param {object} data The data produced by the device.
  */
-function notWithinBoundsOfTouchingZones(data) {
+function notWithinBoundsOfTouchingZones(data): { passed: boolean, percentage: number } {
   const { id, zone, section, temperature, invalid, type } = data;
-  return true;
+  return { passed: true, percentage: 0 };
 }
 
-function performCorrelationCheck(data) {
-  const failedCorrelation = { reason: null, failed: false };
+function performCorrelationCheck(data): { reason: any, failed: boolean, percentage: number } {
+  const failedCorrelation = { reason: null, failed: false, percentage: 0 };
 
-  if (!failedCorrelation.failed && !notWithinBoundsOfTouchingZones(data)) {
-    failedCorrelation.reason = state.correlationFailedTypes.WITHIN_BOUNDING_ZONES;
-    failedCorrelation.failed = true;
+
+  if (!failedCorrelation.failed) {
+    const outputCheck = notWithinBoundsOfTouchingZones(data);
+
+    if (!outputCheck.passed) {
+      failedCorrelation.reason = state.correlationFailedTypes.WITHIN_BOUNDING_ZONES;
+      failedCorrelation.percentage = outputCheck.percentage;
+      failedCorrelation.failed = true;
+    }
   }
 
-  if (!failedCorrelation.failed && !withinZoneSectionData(data)) {
-    failedCorrelation.reason = state.correlationFailedTypes.NOT_WITHIN_ZONE;
-    failedCorrelation.failed = true;
+  if (!failedCorrelation.failed) {
+    const outputCheck = withinZoneSectionData(data);
+
+    if (!outputCheck.passed) {
+      failedCorrelation.reason = state.correlationFailedTypes.NOT_WITHIN_ZONE;
+      failedCorrelation.percentage = outputCheck.percentage;
+      failedCorrelation.failed = true;
+    }
   }
 
   // if we are not invalid don't bother
-  if (!failedCorrelation.failed && !withinZoneAndSectionData(data)) {
-    failedCorrelation.reason = state.correlationFailedTypes.NOT_WITHIN_ZONE_SECTION;
-    failedCorrelation.failed = true;
+  if (!failedCorrelation.failed) {
+    const outputCheck = withinZoneAndSectionData(data);
+
+    if (!outputCheck.passed) {
+      failedCorrelation.reason = state.correlationFailedTypes.NOT_WITHIN_ZONE_SECTION;
+      failedCorrelation.percentage = outputCheck.percentage;
+      failedCorrelation.failed = true;
+    }
   }
 
   // write it into the database with the expanded data, reason caught, and related data.
@@ -157,7 +180,7 @@ function handleReadyState(type) {
  * Progresses new messages received by the reader.
  * @param {object} The message that was sent to the by the reader.
  */
-function handleReaderMessage(message) {
+async function handleReaderMessage(message) {
   const { id, zone, section, temperature: temp, invalid, type } = JSON.parse(message.body.toString());
   const location = section - 1;
 
@@ -179,7 +202,14 @@ function handleReaderMessage(message) {
         `validation correlation - failed for ${id} - zone: ${zone}, section: ${section}, invalid: ` +
         `${invalid}, type: ${type}, reason: ${correlationCheck.reason}, percentage: ${correlationCheck.percentage}, temperature: ${temp.temperature}, humidity: ${temp.humidity}`;
 
+      const deviceEntry = new DeviceEntry(id, zone, section, type, invalid, correlationCheck.reason,
+        correlationCheck.percentage, temp.temperature, temp.humidity);
+
       // logger.info(logMessage);
+
+      // insert the flagged as failed entry into the database.
+      await getRepository(DeviceEntry).insert(deviceEntry);
+
       return message.finish();
     }
   }
@@ -224,16 +254,22 @@ state.reader.on('error', handleReaderError);
 async function setup() {
   await sleep(1000);
   logger.info('setting up aggregator');
-  logger.info('generating index array');
 
+  logger.info('connecting to the database');
+  await ConnectToDatabase(Connection);
+
+  logger.info('generating index array');
   // setup the data arrays that will contain all the history of all the sensor data. since if we
   // allocate all the space before hand to help with simplifying allocation of space.
   for (let index = 0; index < 36; index++) {
     zones.data.push([]);
   }
 
+
   state.reader.connect();
   state.writer.connect();
 }
 
-setup();
+setup().catch((error) => {
+  logger.error(error.message);
+});

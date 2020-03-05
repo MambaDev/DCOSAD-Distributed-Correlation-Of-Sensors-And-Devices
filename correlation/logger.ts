@@ -1,4 +1,4 @@
-const winston = require('winston');
+import * as winston from 'winston';
 
 const { colorize, combine, timestamp, printf, splat } = winston.format;
 
@@ -18,7 +18,7 @@ const logLevels = {
  * with a timestamp, level and message. Designed to also handle cases
  * in which a error stack/message is involved.
  */
-const myFormat = printf((info) => {
+const myFormat = printf((info: any) => {
   let message = `${info.timestamp} ${info.level}: `;
 
   if (info instanceof Error) {
@@ -47,4 +47,5 @@ const logger = winston.createLogger({
   ],
 });
 
-module.exports = logger;
+export { logger };
+export default logger;
