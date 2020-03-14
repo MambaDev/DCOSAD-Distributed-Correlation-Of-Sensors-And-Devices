@@ -186,7 +186,7 @@ async function setup() {
   const temp = zone.temperature;
 
   logger.info(`allocated id: ${deviceId}, zone: ${zone.id}, section: ${zone.section}, range: ${temp.min}-${temp.max}`);
-  state.reportingInterval = setInterval(sendReportingData, 50);
+  state.reportingInterval = setInterval(sendReportingData, 2500);
 }
 
 setup();

@@ -1,7 +1,7 @@
 {
   "type": "postgres",
-  "host": "database",
-  "port": 54320,
+  "host": "cdatabase",
+  "port": 5432,
   "username": "root",
   "password": "root",
   "database": "correlation",

@@ -9,7 +9,6 @@ import { DeviceEntry } from './entity/device.model';
 
 const { sleep } = require('../shared/utilities');
 
-
 const state = {
   writerReady: false,
   readerReady: false,
@@ -52,6 +51,27 @@ const zones = {
 };
 
 // ###################################
+// # Correlation utilities
+// ###################################
+
+/**
+ * Gets the average of all the zone section data for a given zone
+ * that is based on only temperature and not humidity now.
+ * @param zone the zone number that will be used (not index).
+ */
+function getZoneSectionAveragesDataForZone(zone) {
+  const zoneRangeData = [];
+
+  for (let i = zones.info[zone - 1].sections.min - 1; i < zones.info[zone - 1].sections.max; i++) {
+    if (zones.data[i].length === 0) continue;
+
+    zoneRangeData.push(_.sum(_.map(zones.data[i], (e) => e.temperature)) / zones.data[i].length);
+  }
+
+  return zoneRangeData;
+}
+
+// ###################################
 // # Correlation Check
 // ###################################
 
@@ -61,25 +81,18 @@ const zones = {
  *
  * @param {object} data The data produced by the device.
  */
-function withinZoneSectionData(data): { passed: boolean, percentage: number } {
-  const { id, zone, section, temperature, invalid, type } = data;
-  const zoneRangeData = [];
+function withinZoneSectionData(data): { passed: boolean; percentage: number } {
+  const { zone, temperature } = data;
+  const result = { passed: true, percentage: 0 };
 
-  for (let i = zones.info[zone - 1].sections.min - 1; i < zones.info[zone - 1].sections.max; i++) {
-    if (zones.data[i].length === 0) continue;
-
-    zoneRangeData.push(_.sum(_.map(zones.data[i], (e) => e.temperature)) / zones.data[i].length);
-  }
-
-  if (zoneRangeData.length == 0) return { passed: true, percentage: 0 };
+  const zoneRangeData = getZoneSectionAveragesDataForZone(zone);
+  if (zoneRangeData.length == 0) return result;
 
   const average = _.sum(zoneRangeData) / zoneRangeData.length;
-  const percentage = Math.abs((temperature.temperature / average - 1) * 100);
+  result.percentage = Math.abs((temperature.temperature / average - 1) * 100);
+  result.passed = result.percentage <= 15;
 
-  logger.info({ len: zoneRangeData.length,  average, temp: temperature.temperature, percentage });
-
-  if (zoneRangeData.length === 0) return { passed: true, percentage: 0 };
-  return { passed: percentage <= 15, percentage };
+  return result;
 }
 
 /**
@@ -88,16 +101,18 @@ function withinZoneSectionData(data): { passed: boolean, percentage: number } {
  *
  * @param {object} data The data produced by the device.
  */
-function withinZoneAndSectionData(data): { passed: boolean, percentage: number } {
-  const { id, zone, section, temperature, invalid, type } = data;
+function withinZoneAndSectionData(data): { passed: boolean; percentage: number } {
+  const { section, temperature } = data;
+  const result = { passed: true, percentage: 0 };
 
-  const zoneData = zones.data[data.section - 1];
-  if (zoneData.length == 0) return { passed: true, percentage: 0 };
+  const zoneData = zones.data[section - 1];
+  if (zoneData.length == 0) return result;
 
   const average = _.sum(_.map(zoneData, (e) => e.temperature)) / zoneData.length;
+  result.percentage = Math.abs((temperature.temperature / average - 1) * 100);
+  result.passed = result.percentage <= 12.5;
 
-  const percentage = Math.abs((temperature.temperature / average - 1) * 100);
-  return { passed: percentage <= 12.5, percentage };
+  return result;
 }
 
 /**
@@ -107,14 +122,52 @@ function withinZoneAndSectionData(data): { passed: boolean, percentage: number }
  *
  * @param {object} data The data produced by the device.
  */
-function notWithinBoundsOfTouchingZones(data): { passed: boolean, percentage: number } {
+function notWithinBoundsOfTouchingZones(data): { passed: boolean; percentage: number } {
   const { id, zone, section, temperature, invalid, type } = data;
-  return { passed: true, percentage: 0 };
+  const result = { passed: true, percentage: 0 };
+
+  const currentZoneData = getZoneSectionAveragesDataForZone(zone);
+  if (currentZoneData.length == 0) return result;
+
+  const average = _.sum(currentZoneData) / currentZoneData.length;
+  const currentPercentage = Math.abs((temperature.temperature / average - 1) * 100);
+
+  const dataToBeDone = [];
+  const boundingZoningData = [];
+  let done = false;
+
+  // we are the top index and zone and only need to breach out in
+  // the increasing direction.
+  if (zone - 1 != 0) {
+    const increasingZoneData = getZoneSectionAveragesDataForZone(zone - 1);
+    dataToBeDone.push(increasingZoneData);
+  }
+
+  // we are the bottom most index and thus only need to breach out in
+  // the decreasing direction.
+  if (zone + 1 <= zones.info.length) {
+    const decreasingZoneData = getZoneSectionAveragesDataForZone(zone + 1);
+    dataToBeDone.push(decreasingZoneData);
+  }
+
+  for (const zoneData of dataToBeDone) {
+    if (zoneData.length == 0) continue;
+
+    const average = _.sum(zoneData) / zoneData.length;
+    const percentage = Math.abs((temperature.temperature / average - 1) * 100);
+    boundingZoningData.push(percentage);
+  }
+
+  const min = _.min(boundingZoningData.concat([currentPercentage]));
+
+  result.passed = min != currentPercentage;
+  result.percentage = currentPercentage;
+
+  return result;
 }
 
-function performCorrelationCheck(data): { reason: any, failed: boolean, percentage: number } {
+function performCorrelationCheck(data): { reason: any; failed: boolean; percentage: number } {
   const failedCorrelation = { reason: null, failed: false, percentage: 0 };
-
 
   if (!failedCorrelation.failed) {
     const outputCheck = notWithinBoundsOfTouchingZones(data);
@@ -156,6 +209,8 @@ function performCorrelationCheck(data): { reason: any, failed: boolean, percenta
   // we must also store this kind of information, so that we know what type is not being
   // caught and any additional data that could be used to understand why.
   if (!failedCorrelation.failed && data.invalid) {
+    failedCorrelation.reason = 'NOT_DETECTED_BUT_INVALID';
+    failedCorrelation.failed = true;
     return failedCorrelation;
   }
 
@@ -193,7 +248,7 @@ async function handleReaderMessage(message) {
   // if the data failed the validation process or it was a invalid data type, then don't bother processing the data
   // more and let the logger know that one was caught. This should return false always if the data was caught or invalid.
   // since this is a perfect case and we don't want bad data actually tainting the experiment.
-  if (zoneAmount >= state.zonesDataHistory * 1 || invalid) {
+  if (zoneAmount >= state.zonesDataHistory * 36 || invalid) {
     const correlationCheck = performCorrelationCheck(JSON.parse(message.body));
 
     // if it did not fail, then don't handle it as if it fails.
@@ -202,8 +257,17 @@ async function handleReaderMessage(message) {
         `validation correlation - failed for ${id} - zone: ${zone}, section: ${section}, invalid: ` +
         `${invalid}, type: ${type}, reason: ${correlationCheck.reason}, percentage: ${correlationCheck.percentage}, temperature: ${temp.temperature}, humidity: ${temp.humidity}`;
 
-      const deviceEntry = new DeviceEntry(id, zone, section, type, invalid, correlationCheck.reason,
-        correlationCheck.percentage, temp.temperature, temp.humidity);
+      const deviceEntry = new DeviceEntry(
+        id,
+        zone,
+        section,
+        type,
+        invalid,
+        correlationCheck.reason,
+        correlationCheck.percentage,
+        temp.temperature,
+        temp.humidity
+      );
 
       // logger.info(logMessage);
 
@@ -264,7 +328,6 @@ async function setup() {
   for (let index = 0; index < 36; index++) {
     zones.data.push([]);
   }
-
 
   state.reader.connect();
   state.writer.connect();
